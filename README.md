@@ -24,12 +24,12 @@ This script allows you to create / delete proxy with few taps on your keyboard. 
 -  add-proxy: Add a new proxy (with optional `--dry-run` to preview changes)
 -  delete-proxy: Delete a proxy (no args)
 
-Environment Variables:
+## Environment Variables:
 - `NPM_URL` (required): URL that points to Nginx Proxy Manager
 - `NPM_AUTH_TOKEN` (optional): The "Bearer XXX" token for making API request, will ask for login with email and password if not provided.
 - `HOME` (required): By default, auth credentials with be saved in $HOME/.local/nginx_proxy.json
 
-Sample Input/output:
+## Sample Input/output:
 ```plain
 Current User: [User 1] somebody@mail.com somebody yusing
 Enter domain names (comma separated): home.domain.com
