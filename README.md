@@ -3,7 +3,7 @@ Manipulate reversed proxies in command line
 
 (**Caution**) *I have no responsibility when causing bugs/conflicts using the script, use on your own risk. But feel free to create "issues" or feature requests on GitHub.*
 
-### Why?
+## Why?
 
 It saves time.
 
@@ -11,13 +11,13 @@ Heading into the web UI, tabs and buttons is annoying when you add proxies frequ
 
 This script allows you to create / delete proxy with few taps on your keyboard. With generated default location entry with proper proxy_set_header, etc. 
 
-What you may want to do:
+## What you may want to do:
 1. Rename it to something like `nginx_proxy_cli`
 2. Move it to `$HOME/.local/bin`
 3. `chmod +x $HOME/.local/bin/nginx_proxy_cli`
 4. Enjoy
 
-Available commands:
+## Available commands:
 -  list-user: List all users (no args)
 -  list-cert: List all certificates (no args)
 -  list-proxy: List all proxies (no args)
