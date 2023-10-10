@@ -12,10 +12,13 @@ Heading into the web UI, tabs and buttons is annoying when you add proxies frequ
 This script allows you to create / delete proxy with few taps on your keyboard. With generated default location entry with proper proxy_set_header, etc. 
 
 ## What you may want to do:
-1. Rename it to something like `nginx_proxy_cli`
+1. Rename it to something like `nginx_proxy`
 2. Move it to `$HOME/.local/bin`
-3. `chmod +x $HOME/.local/bin/nginx_proxy_cli`
-4. Enjoy
+3. `chmod +x $HOME/.local/bin/nginx_proxy`
+4. Setup for first time (2 Options)
+  1. `NPM_URL="https://{your_npm_url}" NPM_USER="{login_email}" NPM_PASS="{login_password}" nginx_proxy list-user`
+  2. nginx_proxy list-user then enter your credentials when prompted
+5. Enjoy
 
 ## Available commands:
 -  list-user: List all users (no args)
@@ -23,11 +26,10 @@ This script allows you to create / delete proxy with few taps on your keyboard. 
 -  list-proxy: List all proxies (no args)
 -  add-proxy: Add a new proxy (with optional `--dry-run` to preview changes)
 -  delete-proxy: Delete a proxy (no args)
+-  edit-proxy: Edit a proxy (no args)
 
 ## Environment Variables:
-- `NPM_URL` (required): URL that points to Nginx Proxy Manager
-- `NPM_AUTH_TOKEN` (optional): The "Bearer XXX" token for making API request, will ask for login with email and password if not provided.
-- `HOME` (required): By default, auth credentials with be saved in $HOME/.local/nginx_proxy.json
+- `HOME` (required): By default, auth credentials with be saved in $HOME/.local/nginx_proxy.json (with 0600 permission)
 
 ## Sample Input/output:
 ```plain

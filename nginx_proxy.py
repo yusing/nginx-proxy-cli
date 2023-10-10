@@ -1,11 +1,13 @@
 #!/usr/bin/python3
 from datetime import datetime
+import difflib
 from getpass import getpass
 import os
 import sys
 import json
 from pprint import pprint
-from typing import Optional
+import tempfile
+from typing import Any, Literal, Optional
 
 import requests
 
@@ -15,6 +17,7 @@ HELP = {
     (CMD_LIST_PROXY := "list-proxy"): "List all proxies",
     (CMD_ADD_PROXY := "add-proxy"): "Add a new proxy (with optional --dry-run)",
     (CMD_DELETE_PROXY := "delete-proxy"): "Delete a proxy",
+    (CMD_EDIT_PROXY := "edit-proxy"): "Edit a proxy details",
 }
 
 
@@ -26,35 +29,63 @@ def print_help():
 
 
 NEWLINE = "\n"
-NPM_URL = os.getenv("NPM_URL", "")
 NPM_AUTH_JSON = os.path.join(
     os.getenv("HOME", ""), ".local", "nginx-proxy-manager.json"
 )
-NPM_AUTH_TOKEN = os.getenv("NPM_AUTH_TOKEN")
+NPM_URL = os.getenv("NPM_URL", "")
+NPM_USER = os.getenv("NPM_USER", "")
+NPM_PASS = os.getenv("NPM_PASS", "")
+NPM_AUTH_TOKEN = None
+NPM_LOGIN_ENDPOINT = "/api/tokens"
+last_resp = requests.Response()  # for mypy linting
+
+
+def login():
+    global NPM_AUTH_TOKEN
+    resp = requests.post(
+        NPM_URL + NPM_LOGIN_ENDPOINT,
+        json={"identity": NPM_USER, "secret": NPM_PASS},
+    )
+    if resp.status_code != 200:
+        print("Failed to login", resp.status_code, "\n", resp.text)
+        exit(1)
+    NPM_AUTH_TOKEN = resp.json()["token"]
+
 
 if not os.getenv("HOME"):
-    print("Cannot find home directory")
-    exit(1)
-if not NPM_URL:
-    print("NPM_URL is not set")
-    exit(1)
-if not NPM_AUTH_TOKEN:
-    if os.path.exists(NPM_AUTH_JSON):
-        with open(NPM_AUTH_JSON, "r") as f:
-            auth = json.load(f)
-            expires = auth["expires"]
-            expires = datetime.strptime(expires, "%Y-%m-%dT%H:%M:%S.%fZ")
-            if expires < datetime.now():
-                print("Token expired, please login again")
-                os.remove(NPM_AUTH_JSON)
-            else:
-                NPM_AUTH_TOKEN = auth["token"]
+    raise RuntimeError("HOME directory not set")
+
+if os.path.exists(NPM_AUTH_JSON):
+    with open(NPM_AUTH_JSON, "r") as f:
+        auth = json.load(f)
+        try:
+            NPM_URL = auth["url"]
+            NPM_USER = auth["email"]
+            NPM_PASS = auth["password"]
+        except KeyError:
+            os.remove(NPM_AUTH_JSON)
+
+if not (NPM_URL and NPM_USER and NPM_PASS):
+    print("NPM_URL, NPM_USER, NPM_PASS not set")
+    NPM_URL = input("Enter NPM URL: ")
+    NPM_USER = input("Enter NPM email: ")
+    NPM_PASS = getpass("Enter NPM password: ")
+    if not (NPM_URL and NPM_USER and NPM_PASS):
+        print("Invalid input")
+        exit(1)
+
+login()
+
+if not os.path.exists(NPM_AUTH_JSON):
+    with open(NPM_AUTH_JSON, "w") as f:
+        json.dump({"url": NPM_URL, "email": NPM_USER, "password": NPM_PASS}, f)
+    os.chmod(NPM_AUTH_JSON, 0o600)  # only user can read/write
+
 if len(sys.argv) < 2:
     print("No command specified")
     print_help()
 
 CMD = sys.argv[1]
-last_resp = requests.Response()  # for mypy linting
 
 
 class User(dict):
@@ -144,15 +175,16 @@ class Certificate(dict):
 
 def make_request(
     endpoint: str,
-    method="get",
+    method: Literal["get", "post", "put", "delete"] = "get",
     expected_status=200,
-    map_class: Optional[type] = None,
-    map_by_id=True,
+    map_by_id: Optional[type] = None,
     **kwargs,
-) -> Optional[dict]:
+) -> dict:
+    global last_resp
+
     assert method in ["get", "post", "put", "delete"]
     assert NPM_AUTH_TOKEN is not None
-    global last_resp
+
     last_resp = getattr(requests, method)(
         NPM_URL + endpoint,
         headers={
@@ -161,79 +193,64 @@ def make_request(
         **kwargs,
     )
     if last_resp.status_code != expected_status:
-        return None
+        print(
+            f"Request failed with status {last_resp.status_code}, {method} {endpoint}"
+        )
+        exit(1)
     resp_obj = last_resp.json()
-    if map_class and map_by_id:
+    if map_by_id:
         m = {}
         for item in resp_obj:
-            m[item["id"]] = map_class(item)
+            m[item["id"]] = map_by_id(item)
         return m
-    if map_class:
-        return map_class(resp_obj)
     return resp_obj
 
 
-def list_certs() -> Optional[dict[int, Certificate]]:
-    return make_request("/api/nginx/certificates", map_class=Certificate)
+def list_certs() -> dict[int, Certificate]:
+    return make_request("/api/nginx/certificates", map_by_id=Certificate)
 
 
-def list_proxies() -> Optional[dict[int, Proxy]]:
-    return make_request("/api/nginx/proxy-hosts?expand=certificate", map_class=Proxy)
+def list_proxies() -> dict[int, Proxy]:
+    return make_request("/api/nginx/proxy-hosts?expand=certificate", map_by_id=Proxy)
 
 
-def list_users() -> Optional[dict[int, User]]:
-    return make_request("/api/users", map_class=User)
+def list_users() -> dict[int, User]:
+    return make_request("/api/users", map_by_id=User)
 
 
-def get_user():
-    return make_request("/api/users/me", map_class=User, map_by_id=False)
+def get_user() -> User:
+    return User(make_request("/api/users/me"))
 
 
 def show_current_user():
-    user = get_user()
-    if user is None:
-        print("Failed to get user info")
-        exit(1)
-    print("Current User:", user)
+    print("Current User:", get_user())
 
 
-def login():
-    while NPM_AUTH_TOKEN == None:
-        print("Login with credential you used on web UI:")
-        email = input("Email: ")
-        password = getpass()
-        resp = make_request(
-            "/api/tokens",
-            method="post",
-            expected_status=200,
-            json={"identity": email, "secret": password},
-        )
-        if resp is None:
-            print("Failed to login", last_resp.text)
+def delete_proxy():
+    proxies = list_proxies()
+    pprint(proxies)
+    while True:
+        choice = int(input("Enter proxy ID to delete: "))
+        if choice not in proxies:
+            print("Invalid proxy ID")
             continue
-        with open(NPM_AUTH_JSON, "w") as f:
-            json.dump(resp, f)
-        NPM_AUTH_TOKEN = resp["token"]
-
-
-if not NPM_AUTH_TOKEN:
-    login()
-
-show_current_user()
-if CMD == CMD_LIST_PROXY:
-    pprint(list_proxies())
-elif CMD == CMD_LIST_CERT:
-    pprint(list_certs())
-elif CMD == CMD_LIST_USER:
-    pprint(list_users())
-elif CMD == CMD_ADD_PROXY:
-    certs = list_certs()
-    if not certs:
-        print("Failed to get certificate list")
+        break
+    pprint(proxies[choice])
+    confirm = input("Confirm? (y/n): ")
+    if confirm.lower() != "y":
+        print("Aborted")
         exit(1)
+    resp = make_request(
+        f"/api/nginx/proxy-hosts/{choice}", method="delete", expected_status=204
+    )
+    if resp != "true":
+        print("Failed to delete proxy", last_resp.status_code)
+        exit(1)
+
+
+def add_proxy():
+    certs = list_certs()
     domains = input("Enter domain names (comma separated): ").split(",")
-    domains_fmt = "[" + ",".join(list(map(lambda d: f'"{d}"', domains))) + "]"
-    server_name_entries = "\n  ".join(list(map(lambda d: f"server_name {d};", domains)))
     while True:
         scheme = input("Enter target scheme (http/https): ")
         if scheme not in ["http", "https"]:
@@ -323,30 +340,140 @@ elif CMD == CMD_ADD_PROXY:
     print("Response:")
     pprint(req)
     if not req:
-        print("Failed to add proxy")
+        print("Failed to add proxy", last_resp.status_code)
         exit(1)
     print(f"Done adding {','.join(domains)}")
-elif CMD == CMD_DELETE_PROXY:
+
+
+def edit_proxy():
     proxies = list_proxies()
-    if not proxies:
-        print("Failed to get proxy list")
+    domain = input('Enter a domain to edit (* to list all) (e.g. "example.com"): ')
+    if domain == "*":
+        pprint(proxies)
+        domain = input('Enter a domain to edit (e.g. "example.com"): ')
+    selected = None
+    for proxy in proxies.values():
+        if domain in proxy.domains:
+            selected = proxy
+            break
+    if not selected:
+        print("Domain not found")
         exit(1)
-    pprint(proxies)
-    while True:
-        choice = int(input("Enter proxy ID to delete: "))
-        if choice not in proxies:
-            print("Invalid proxy ID")
-            continue
-        break
-    pprint(proxies[choice])
+    pprint(selected)
+    adv_config = selected["advanced_config"]
+    allowed_keys = [
+        "domain_names",
+        "forward_scheme",
+        "forward_host",
+        "forward_port",
+        "access_list_id",
+        "certificate_id",
+        "ssl_forced",
+        "http2_support",
+        "meta",
+        "block_exploits",
+        "caching_enabled",
+        "allow_websocket_upgrade",
+        "hsts_enabled",
+        "hsts_subdomains",
+    ]
+    proxy_id = selected.id
+    selected = {key: selected[key] for key in allowed_keys}
+    # nano config json
+    with tempfile.NamedTemporaryFile(mode="w+", prefix="Config", suffix=".json") as f:
+        json.dump(selected, f, indent=4)
+        f.flush()
+        os.system(f"nano {f.name}")
+        f.seek(0)
+        try:
+            new_proxy: dict[str, Any] = json.load(f)
+        except json.JSONDecodeError as e:
+            print("Invalid JSON\n", e)
+            exit(1)
+    # nano advanced config
+    with tempfile.NamedTemporaryFile(mode="w+", prefix="AdvancedConfig") as f:
+        f.write(adv_config)
+        f.flush()
+        os.system(f"nano {f.name}")
+        f.seek(0)
+        new_adv_config: str = f.read()
+
+    # check for unexpected keys and changes
+    config_changes = []
+    for key in new_proxy:
+        if key not in selected:
+            print(f"Unexpected Key: {key}")
+            exit(1)
+        if new_proxy[key] != selected[key]:
+            config_changes.append((key, selected[key], new_proxy[key]))
+    adv_config_changes = list(
+        filter(
+            lambda line: (line.startswith("+")
+            and not line.startswith("+++")
+            or line.startswith("-")
+            and not line.startswith("---")) and line.strip() != "",
+            difflib.unified_diff(adv_config.splitlines(), new_adv_config.splitlines()),
+        )
+    )
+
+    # check for missing keys
+    for key in selected:
+        if key not in new_proxy:
+            print(f"Missing Key: {key}")
+            exit(1)
+
+    if not any(config_changes) and not any(adv_config_changes):
+        print("No changes")
+        exit(0)
+
+    print("Please review the following changes:")
+    
+    print("Config:")
+    if any(config_changes):
+        for key, old, new in config_changes:
+            print(f"{key}: {old} -> {new}")
+    else:
+        print("No changes")
+
+    print("\nAdvanced Config:")
+    if any(adv_config_changes):
+        print("\n".join(adv_config_changes))
+    else:
+        print("No changes")
+        
     confirm = input("Confirm? (y/n): ")
     if confirm.lower() != "y":
         print("Aborted")
         exit(1)
-    resp = make_request(f"/api/nginx/proxy-hosts/{choice}", method="delete")
-    if resp != "true":
-        print("Failed to delete proxy")
+
+    # update proxy
+    new_proxy["advanced_config"] = new_adv_config
+
+    req = make_request(
+        f"/api/nginx/proxy-hosts/{proxy_id}",
+        method="put",
+        expected_status=200,
+        json=new_proxy,
+    )
+    if not req:
+        print("Failed to edit proxy", last_resp.status_code)
         exit(1)
+    print("Done editing proxy")
+
+
+show_current_user()
+if CMD == CMD_LIST_PROXY:
+    pprint(list_proxies())
+elif CMD == CMD_LIST_CERT:
+    pprint(list_certs())
+elif CMD == CMD_LIST_USER:
+    pprint(list_users())
+elif CMD == CMD_ADD_PROXY:
+    add_proxy()
+elif CMD == CMD_DELETE_PROXY:
+    delete_proxy()
+elif CMD == CMD_EDIT_PROXY:
+    edit_proxy()
 else:
     print("Invalid command", CMD)
     print_help()
