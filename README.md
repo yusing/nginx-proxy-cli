@@ -15,9 +15,9 @@ This script allows you to create / delete proxy with few taps on your keyboard. 
 1. Rename it to something like `nginx_proxy`
 2. Move it to `$HOME/.local/bin`
 3. `chmod +x $HOME/.local/bin/nginx_proxy`
-4. Setup for first time (2 Options)
-  1. `NPM_URL="https://{your_npm_url}" NPM_USER="{login_email}" NPM_PASS="{login_password}" nginx_proxy list-user`
-  2. nginx_proxy list-user then enter your credentials when prompted
+4. Setup for first time (2 Options):
+    - `NPM_URL="https://{your_npm_url}" NPM_USER="{login_email}" NPM_PASS="{login_password}" nginx_proxy list-user`
+    - nginx_proxy list-user then enter your credentials when prompted
 5. Enjoy
 
 ## Available commands:
