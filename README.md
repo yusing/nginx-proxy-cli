@@ -27,6 +27,9 @@ This script allows you to create / delete proxy with few taps on your keyboard. 
 -  add-proxy: Add a new proxy (with optional `--dry-run` to preview changes)
 -  delete-proxy: Delete a proxy (no args)
 -  edit-proxy: Edit a proxy (no args)
+-  upload-cert: Upload SSL certificate (no args)
+-  delete-cert: Delete a certificate (no args)
+-  new-cert: Get new SSL certificate from Let's Encrypt with Cloudflare DNS challenge (no args)
 
 ## Environment Variables:
 - `HOME` (required): By default, auth credentials with be saved in $HOME/.local/nginx_proxy.json (with 0600 permission)

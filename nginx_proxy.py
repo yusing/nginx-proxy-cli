@@ -3,11 +3,12 @@ from datetime import datetime
 import difflib
 from getpass import getpass
 import os
+import re
 import sys
 import json
 from pprint import pprint
 import tempfile
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import requests
 
@@ -18,6 +19,11 @@ HELP = {
     (CMD_ADD_PROXY := "add-proxy"): "Add a new proxy (with optional --dry-run)",
     (CMD_DELETE_PROXY := "delete-proxy"): "Delete a proxy",
     (CMD_EDIT_PROXY := "edit-proxy"): "Edit a proxy details",
+    (CMD_UPLOAD_CERT := "upload-cert"): "Upload a SSL certificate",
+    (CMD_DELETE_CERT := "delete-cert"): "Delete a SSL certificate",
+    (
+        CMD_NEW_CERT := "new-cert"
+    ): "Get new SSL certificate from Let's Encrypt with Cloudflare DNS challenge",
 }
 
 
@@ -35,7 +41,7 @@ NPM_AUTH_JSON = os.path.join(
 NPM_URL = os.getenv("NPM_URL", "")
 NPM_USER = os.getenv("NPM_USER", "")
 NPM_PASS = os.getenv("NPM_PASS", "")
-NPM_AUTH_TOKEN = None
+NPM_AUTH_TOKEN: str = ""
 NPM_LOGIN_ENDPOINT = "/api/tokens"
 last_resp = requests.Response()  # for mypy linting
 
@@ -75,6 +81,10 @@ if not (NPM_URL and NPM_USER and NPM_PASS):
         exit(1)
 
 login()
+
+NPM_AUTH_HEADERS = {
+    "Authorization": "Bearer " + NPM_AUTH_TOKEN,
+}
 
 if not os.path.exists(NPM_AUTH_JSON):
     with open(NPM_AUTH_JSON, "w") as f:
@@ -178,18 +188,18 @@ def make_request(
     method: Literal["get", "post", "put", "delete"] = "get",
     expected_status=200,
     map_by_id: Optional[type] = None,
+    extra_headers: dict[str, str] = {},
     **kwargs,
 ) -> dict:
     global last_resp
 
     assert method in ["get", "post", "put", "delete"]
     assert NPM_AUTH_TOKEN is not None
-
+    headers = NPM_AUTH_HEADERS
+    headers.update(extra_headers)
     last_resp = getattr(requests, method)(
         NPM_URL + endpoint,
-        headers={
-            "Authorization": "Bearer " + NPM_AUTH_TOKEN,
-        },
+        headers=headers,
         **kwargs,
     )
     if last_resp.status_code != expected_status:
@@ -222,30 +232,38 @@ def get_user() -> User:
     return User(make_request("/api/users/me"))
 
 
-def show_current_user():
-    print("Current User:", get_user())
-
-
-def delete_proxy():
-    proxies = list_proxies()
-    pprint(proxies)
+def delete_entry(
+    name: str, endpoint: str, getter: Callable[[], dict], expected_status=204
+):
+    entries = getter()
+    pprint(entries)
     while True:
-        choice = int(input("Enter proxy ID to delete: "))
-        if choice not in proxies:
-            print("Invalid proxy ID")
+        choice = int(input(f"Enter {name} ID to delete: "))
+        if choice not in entries:
+            print(f"Invalid {name} ID")
             continue
         break
-    pprint(proxies[choice])
+    pprint(entries[choice])
     confirm = input("Confirm? (y/n): ")
     if confirm.lower() != "y":
         print("Aborted")
         exit(1)
     resp = make_request(
-        f"/api/nginx/proxy-hosts/{choice}", method="delete", expected_status=204
+        f"{endpoint}/{choice}", method="delete", expected_status=expected_status
     )
     if resp != "true":
-        print("Failed to delete proxy", last_resp.status_code)
+        print(f"Failed to delete {name}", last_resp.status_code)
         exit(1)
+
+
+def delete_proxy():
+    delete_entry("proxy", "/api/nginx/proxy-hosts", list_proxies)
+
+
+def delete_cert():
+    delete_entry(
+        "certificate", "/api/nginx/certificates", list_certs, expected_status=200
+    )
 
 
 def add_proxy():
@@ -339,9 +357,6 @@ def add_proxy():
     )
     print("Response:")
     pprint(req)
-    if not req:
-        print("Failed to add proxy", last_resp.status_code)
-        exit(1)
     print(f"Done adding {','.join(domains)}")
 
 
@@ -396,7 +411,7 @@ def edit_proxy():
         f.flush()
         os.system(f"nano {f.name}")
         f.seek(0)
-        new_adv_config: str = f.read()
+        new_adv_config = f.read()
 
     # check for unexpected keys and changes
     config_changes = []
@@ -408,10 +423,13 @@ def edit_proxy():
             config_changes.append((key, selected[key], new_proxy[key]))
     adv_config_changes = list(
         filter(
-            lambda line: (line.startswith("+")
-            and not line.startswith("+++")
-            or line.startswith("-")
-            and not line.startswith("---")) and line.strip() != "",
+            lambda line: (
+                line.startswith("+")
+                and not line.startswith("+++")
+                or line.startswith("-")
+                and not line.startswith("---")
+            )
+            and line.strip() != "",
             difflib.unified_diff(adv_config.splitlines(), new_adv_config.splitlines()),
         )
     )
@@ -427,7 +445,7 @@ def edit_proxy():
         exit(0)
 
     print("Please review the following changes:")
-    
+
     print("Config:")
     if any(config_changes):
         for key, old, new in config_changes:
@@ -440,7 +458,7 @@ def edit_proxy():
         print("\n".join(adv_config_changes))
     else:
         print("No changes")
-        
+
     confirm = input("Confirm? (y/n): ")
     if confirm.lower() != "y":
         print("Aborted")
@@ -455,13 +473,91 @@ def edit_proxy():
         expected_status=200,
         json=new_proxy,
     )
-    if not req:
-        print("Failed to edit proxy", last_resp.status_code)
-        exit(1)
     print("Done editing proxy")
 
 
-show_current_user()
+def upload_cert():
+    while True:
+        fullchain = input("Enter fullchain path: ")
+        if not os.path.exists(fullchain):
+            print("File not found")
+            continue
+        break
+    while True:
+        privkey = input("Enter privkey path: ")
+        if not os.path.exists(privkey):
+            print("File not found")
+            continue
+        break
+
+    def files():
+        return {
+            "certificate": ("fullchain.pem", open(fullchain, "r")),
+            "certificate_key": ("privkey.pem", open(privkey, "r")),
+        }
+
+    validate_req = make_request(
+        f"/api/nginx/certificates/validate",
+        method="post",
+        expected_status=200,
+        files=files(),
+    )
+    print("Selected certificate:")
+    pprint(validate_req)
+    add_req = make_request(
+        "/api/nginx/certificates",
+        method="post",
+        expected_status=201,
+        json={"nice_name": input("Enter certificate name: "), "provider": "other"},
+    )
+    cert_id = add_req["id"]
+    make_request(
+        f"/api/nginx/certificates/{cert_id}/upload",
+        method="post",
+        expected_status=200,
+        files=files(),
+    )
+    print("Done uploading certificate")
+
+
+def new_cert():
+    use_current_email = (
+        input(f"Use {current_user.email} as Let's Encrypt Email? (y/n): ").lower()
+        == "y"
+    )
+    if not use_current_email:
+        email = input("Enter Let's Encrypt Email: ")
+    else:
+        email = current_user.email
+    domain = input("Enter domain name: ")
+    cf_token = input("Enter Cloudflare API Token: ")
+    req_json = {
+        "domain_names": [domain],
+        "meta": {
+            "letsencrypt_email": email,
+            "dns_challenge": True,
+            "dns_provider": "cloudflare",
+            "dns_provider_credentials": f"# Cloudflare API token\r\ndns_cloudflare_api_token = {cf_token}",
+            "letsencrypt_agree": True,
+        },
+        "provider": "letsencrypt",
+    }
+    print("Requesting certificate...")
+    req = Certificate(
+        make_request(
+            "/api/nginx/certificates",
+            method="post",
+            expected_status=201,
+            json=req_json,
+        )
+    )
+    print("Done requesting certificate, details below:")
+    pprint(req)
+
+
+current_user = get_user()
+print("Current User:", current_user)
+
 if CMD == CMD_LIST_PROXY:
     pprint(list_proxies())
 elif CMD == CMD_LIST_CERT:
@@ -474,6 +570,12 @@ elif CMD == CMD_DELETE_PROXY:
     delete_proxy()
 elif CMD == CMD_EDIT_PROXY:
     edit_proxy()
+elif CMD == CMD_UPLOAD_CERT:
+    upload_cert()
+elif CMD == CMD_DELETE_CERT:
+    delete_cert()
+elif CMD == CMD_NEW_CERT:
+    new_cert()
 else:
     print("Invalid command", CMD)
     print_help()
