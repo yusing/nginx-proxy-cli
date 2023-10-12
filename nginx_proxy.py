@@ -257,7 +257,7 @@ def delete_entry(
 
 
 def delete_proxy():
-    delete_entry("proxy", "/api/nginx/proxy-hosts", list_proxies)
+    delete_entry("proxy", "/api/nginx/proxy-hosts", list_proxies, expected_status=200)
 
 
 def delete_cert():
