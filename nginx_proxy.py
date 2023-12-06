@@ -15,7 +15,7 @@ import requests
 HELP = {
     (CMD_LIST_USER := "list-user"): "List all users",
     (CMD_LIST_CERT := "list-cert"): "List all certificates",
-    (CMD_LIST_PROXY := "list-proxy"): "List all proxies",
+    (CMD_LIST_PROXY := "list-proxy"): "List all proxies (with optional --raw)",
     (CMD_ADD_PROXY := "add-proxy"): "Add a new proxy (with optional --dry-run)",
     (CMD_DELETE_PROXY := "delete-proxy"): "Delete a proxy",
     (CMD_EDIT_PROXY := "edit-proxy"): "Edit a proxy details",
@@ -91,13 +91,6 @@ if not os.path.exists(NPM_AUTH_JSON):
         json.dump({"url": NPM_URL, "email": NPM_USER, "password": NPM_PASS}, f)
     os.chmod(NPM_AUTH_JSON, 0o600)  # only user can read/write
 
-if len(sys.argv) < 2:
-    print("No command specified")
-    print_help()
-
-CMD = sys.argv[1]
-
-
 class User(dict):
     @property
     def id(self) -> int:
@@ -146,11 +139,9 @@ class Proxy(dict):
         return self["certificate_id"]
 
     def __str__(self) -> str:
-        return f"""[Proxy {self.id}]
-    Is Enabled? {self.enabled}
-    Domains: {self.domains}
-    Target: {self.target}
-    Cert ID: {self.cert}"""
+        return f"""[Proxy {self.id} ({'Enabled' if self.enabled else 'Disabled'})]
+    Domains: {self.domains} (Cert {self.cert})
+    Target: {self.target}"""
 
     def __repr__(self) -> str:
         return str(self)
@@ -220,8 +211,9 @@ def list_certs() -> dict[int, Certificate]:
     return make_request("/api/nginx/certificates", map_by_id=Certificate)
 
 
-def list_proxies() -> dict[int, Proxy]:
-    return make_request("/api/nginx/proxy-hosts?expand=certificate", map_by_id=Proxy)
+def list_proxies(raw: bool = False, values_only = False) -> dict[int, Proxy] | list[Proxy]:
+    if values_only and not raw: return list(list_proxies(raw=raw, values_only=False).values())
+    return make_request("/api/nginx/proxy-hosts?expand=certificate", map_by_id=Proxy if not raw else None)
 
 
 def list_users() -> dict[int, User]:
@@ -236,7 +228,7 @@ def delete_entry(
     name: str, endpoint: str, getter: Callable[[], dict], expected_status=204
 ):
     entries = getter()
-    pprint(entries)
+    pprint(list(entries.values()))
     while True:
         choice = int(input(f"Enter {name} ID to delete: "))
         if choice not in entries:
@@ -251,9 +243,6 @@ def delete_entry(
     resp = make_request(
         f"{endpoint}/{choice}", method="delete", expected_status=expected_status
     )
-    if resp != "true":
-        print(f"Failed to delete {name}", last_resp.status_code)
-        exit(1)
 
 
 def delete_proxy():
@@ -361,13 +350,13 @@ def add_proxy():
 
 
 def edit_proxy():
-    proxies = list_proxies()
+    proxies = list_proxies(raw=False, values_only=Truee)
     domain = input('Enter a domain to edit (* to list all) (e.g. "example.com"): ')
     if domain == "*":
         pprint(proxies)
         domain = input('Enter a domain to edit (e.g. "example.com"): ')
     selected = None
-    for proxy in proxies.values():
+    for proxy in proxies:
         if domain in proxy.domains:
             selected = proxy
             break
@@ -554,28 +543,34 @@ def new_cert():
     print("Done requesting certificate, details below:")
     pprint(req)
 
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("No command specified")
+        print_help()
 
-current_user = get_user()
-print("Current User:", current_user)
+    CMD = sys.argv[1]
 
-if CMD == CMD_LIST_PROXY:
-    pprint(list_proxies())
-elif CMD == CMD_LIST_CERT:
-    pprint(list_certs())
-elif CMD == CMD_LIST_USER:
-    pprint(list_users())
-elif CMD == CMD_ADD_PROXY:
-    add_proxy()
-elif CMD == CMD_DELETE_PROXY:
-    delete_proxy()
-elif CMD == CMD_EDIT_PROXY:
-    edit_proxy()
-elif CMD == CMD_UPLOAD_CERT:
-    upload_cert()
-elif CMD == CMD_DELETE_CERT:
-    delete_cert()
-elif CMD == CMD_NEW_CERT:
-    new_cert()
-else:
-    print("Invalid command", CMD)
-    print_help()
+    current_user = get_user()
+    print("Current User:", current_user)
+
+    if CMD == CMD_LIST_PROXY:
+        pprint(list_proxies(raw='--raw' in sys.argv, values_only=True))
+    elif CMD == CMD_LIST_CERT:
+        pprint(list_certs())
+    elif CMD == CMD_LIST_USER:
+        pprint(list_users())
+    elif CMD == CMD_ADD_PROXY:
+        add_proxy()
+    elif CMD == CMD_DELETE_PROXY:
+        delete_proxy()
+    elif CMD == CMD_EDIT_PROXY:
+        edit_proxy()
+    elif CMD == CMD_UPLOAD_CERT:
+        upload_cert()
+    elif CMD == CMD_DELETE_CERT:
+        delete_cert()
+    elif CMD == CMD_NEW_CERT:
+        new_cert()
+    else:
+        print("Invalid command", CMD)
+        print_help()
