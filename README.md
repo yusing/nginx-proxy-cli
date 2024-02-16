@@ -3,6 +3,8 @@ Manipulate reversed proxies in command line
 
 (**Caution**) *I have no responsibility when causing bugs/conflicts using the script, use on your own risk. But feel free to create "issues" or feature requests on GitHub.*
 
+(**Notice**) You cuold also use [docker-playbook](https://github.com/yusing/docker-playbook) and might be simpler.
+
 ## Why?
 
 It saves time.
